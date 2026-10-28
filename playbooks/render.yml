@@ -1,0 +1,69 @@
+---
+# Render every artifact from inventory/fabric.yml into build/.
+# Uses only ansible.builtin modules; re-running without YAML changes reports no changes.
+- name: Render lab artifacts from the source of truth
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../inventory/fabric.yml
+  vars:
+    repo_dir: "{{ playbook_dir | dirname }}"
+    build_dir: "{{ repo_dir }}/build"
+  tasks:
+    - name: Create build directories
+      ansible.builtin.file:
+        path: "{{ build_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [frr, netdev, hosts]
+
+    - name: Render containerlab topology
+      ansible.builtin.template:
+        src: "{{ repo_dir }}/templates/topology.clab.yml.j2"
+        dest: "{{ build_dir }}/topology.clab.yml"
+        mode: "0644"
+
+    - name: Render FRR config for spines
+      ansible.builtin.template:
+        src: "{{ repo_dir }}/templates/frr.conf.j2"
+        dest: "{{ build_dir }}/frr/{{ node.name }}.conf"
+        mode: "0644"
+      vars:
+        role: spine
+      loop: "{{ spines }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.name }}"
+
+    - name: Render FRR config for leafs
+      ansible.builtin.template:
+        src: "{{ repo_dir }}/templates/frr.conf.j2"
+        dest: "{{ build_dir }}/frr/{{ node.name }}.conf"
+        mode: "0644"
+      vars:
+        role: leaf
+      loop: "{{ leafs }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.name }}"
+
+    - name: Render Linux bridge/VXLAN/VRF setup for leafs
+      ansible.builtin.template:
+        src: "{{ repo_dir }}/templates/leaf-netdev.sh.j2"
+        dest: "{{ build_dir }}/netdev/{{ node.name }}.sh"
+        mode: "0755"
+      loop: "{{ leafs }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.name }}"
+
+    - name: Render host addressing scripts
+      ansible.builtin.template:
+        src: "{{ repo_dir }}/templates/host.sh.j2"
+        dest: "{{ build_dir }}/hosts/{{ host.name }}.sh"
+        mode: "0755"
+      loop: "{{ hosts }}"
+      loop_control:
+        loop_var: host
+        label: "{{ host.name }}"

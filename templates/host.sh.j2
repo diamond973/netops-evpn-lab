@@ -1,0 +1,21 @@
+#!/bin/sh
+# Addressing for {{ host.name }}. Rendered from inventory/fabric.yml.
+set -eu
+{% set vlan = vlans | selectattr('id', 'equalto', host.vlan) | first %}
+{% set plen = vlan.subnet.split('/')[1] %}
+BEFORE=$(ip -o addr show dev eth1; ip route show)
+for a in $(ip -o -4 addr show dev eth1 | awk '{print $4}'); do
+    [ "$a" = "{{ host.ip }}/{{ plen }}" ] || ip addr del "$a" dev eth1
+done
+ip addr replace {{ host.ip }}/{{ plen }} dev eth1
+ip link set eth1 up
+{% if vlan.gateway is defined %}
+ip route replace default via {{ vlan.gateway }} dev eth1
+{% endif %}
+AFTER=$(ip -o addr show dev eth1; ip route show)
+{% if vlan.gateway is defined %}
+# Announce the host to its leaf (like any real host would after boot), so the
+# leaf learns MAC/IP and advertises an EVPN type-2 route for it.
+ping -c 1 -W 1 {{ vlan.gateway }} >/dev/null 2>&1 || true
+{% endif %}
+if [ "$BEFORE" = "$AFTER" ]; then echo OK; else echo CHANGED; fi

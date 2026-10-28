@@ -1,0 +1,74 @@
+#!/bin/sh
+# Linux bridge / VXLAN / VRF setup for {{ node.name }}.
+# Rendered from inventory/fabric.yml. Safe to run repeatedly: it only creates
+# what is missing, removes VLANs/VRFs no longer in the source of truth and
+# prints CHANGED when the kernel state differs from before the run.
+set -eu
+
+LOCAL_VTEP={{ node.loopback }}
+ANYCAST_MAC={{ anycast_gw_mac }}
+
+snapshot() {
+    ip -d -o link show | sed -E 's/ (state|qlen|operstate) [^ ]+//g; s/ [a-z_]+_timer +[0-9.]+//g'
+    ip -o addr show
+    bridge -o link show
+}
+BEFORE=$(snapshot)
+
+exists() { ip link show "$1" >/dev/null 2>&1; }
+
+# Interface names managed by this script that should exist.
+WANT=""
+
+{% for vrf in vrfs %}
+{%   set table = 1000 + loop.index %}
+# VRF {{ vrf.name }}, L3 VNI {{ vrf.l3vni }}
+exists {{ vrf.name }} || ip link add {{ vrf.name }} type vrf table {{ table }}
+ip link set {{ vrf.name }} up
+exists br{{ vrf.l3vni }} || ip link add br{{ vrf.l3vni }} type bridge
+ip link set br{{ vrf.l3vni }} addrgenmode none
+exists vni{{ vrf.l3vni }} || ip link add vni{{ vrf.l3vni }} type vxlan id {{ vrf.l3vni }} local "$LOCAL_VTEP" dstport 4789 nolearning
+ip link set vni{{ vrf.l3vni }} master br{{ vrf.l3vni }}
+bridge link set dev vni{{ vrf.l3vni }} learning off
+ip link set br{{ vrf.l3vni }} master {{ vrf.name }}
+ip link set vni{{ vrf.l3vni }} up
+ip link set br{{ vrf.l3vni }} up
+WANT="$WANT {{ vrf.name }} br{{ vrf.l3vni }} vni{{ vrf.l3vni }}"
+
+{% endfor %}
+{% for vlan in vlans %}
+# VLAN {{ vlan.id }} ({{ vlan.name }}), L2 VNI {{ vlan.vni }}
+exists br{{ vlan.id }} || ip link add br{{ vlan.id }} type bridge
+# Same MAC/IPv6 LL on every leaf would trip DAD across the overlay.
+ip link set br{{ vlan.id }} addrgenmode none
+exists vni{{ vlan.vni }} || ip link add vni{{ vlan.vni }} type vxlan id {{ vlan.vni }} local "$LOCAL_VTEP" dstport 4789 nolearning
+ip link set vni{{ vlan.vni }} master br{{ vlan.id }}
+bridge link set dev vni{{ vlan.vni }} learning off neigh_suppress on
+{%   for host in hosts if host.leaf == node.name and host.vlan == vlan.id %}
+ip link set {{ host.leaf_port }} master br{{ vlan.id }}
+ip link set {{ host.leaf_port }} up
+{%   endfor %}
+{%   if vlan.vrf is defined %}
+ip link set br{{ vlan.id }} address "$ANYCAST_MAC"
+ip link set br{{ vlan.id }} master {{ vlan.vrf }}
+ip addr replace {{ vlan.gateway }}/{{ vlan.subnet.split('/')[1] }} dev br{{ vlan.id }}
+{%   endif %}
+ip link set vni{{ vlan.vni }} up
+ip link set br{{ vlan.id }} up
+WANT="$WANT br{{ vlan.id }} vni{{ vlan.vni }}"
+
+{% endfor %}
+# Remove bridges, VXLAN devices and VRFs that are no longer declared.
+for dev in $(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1); do
+    case "$dev" in
+        br[0-9]*|vni[0-9]*) ;;
+        *) ip -d link show "$dev" | grep -q ' vrf table ' || continue ;;
+    esac
+    case " $WANT " in
+        *" $dev "*) ;;
+        *) ip link del "$dev" ;;
+    esac
+done
+
+AFTER=$(snapshot)
+if [ "$BEFORE" = "$AFTER" ]; then echo OK; else echo CHANGED; fi

@@ -1,0 +1,87 @@
+---
+# Render configs, then push them into the running containerlab nodes with
+# `docker exec`. Every task reports "changed" only when the device state changed.
+- name: Render
+  ansible.builtin.import_playbook: render.yml
+
+- name: Deploy rendered configs to the lab
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../inventory/fabric.yml
+  vars:
+    repo_dir: "{{ playbook_dir | dirname }}"
+    build_dir: "{{ repo_dir }}/build"
+    prefix: "clab-{{ lab_name }}-"
+    fabric_nodes: "{{ spines + leafs }}"
+  tasks:
+    - name: Wait for FRR to answer in every fabric node
+      ansible.builtin.command: docker exec {{ prefix }}{{ item.name }} vtysh -c "show version"
+      register: frr_ready
+      until: frr_ready.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+      loop: "{{ fabric_nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Apply bridge/VXLAN/VRF setup on leafs
+      ansible.builtin.command:
+        cmd: docker exec -i {{ prefix }}{{ item.name }} sh -s
+        stdin: "{{ lookup('ansible.builtin.file', build_dir ~ '/netdev/' ~ item.name ~ '.sh') }}"
+      register: netdev
+      changed_when: "'CHANGED' in netdev.stdout"
+      loop: "{{ leafs }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Stat rendered FRR configs
+      ansible.builtin.stat:
+        path: "{{ build_dir }}/frr/{{ item.name }}.conf"
+        checksum_algorithm: sha1
+      register: frr_local
+      loop: "{{ fabric_nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Read FRR config checksum on the device
+      ansible.builtin.command: docker exec {{ prefix }}{{ item.name }} sha1sum /etc/frr/frr.conf
+      register: frr_remote
+      failed_when: false
+      changed_when: false
+      loop: "{{ fabric_nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Copy FRR config where it differs
+      ansible.builtin.command: >-
+        docker cp {{ build_dir }}/frr/{{ item.0.name }}.conf
+        {{ prefix }}{{ item.0.name }}:/etc/frr/frr.conf
+      when: (item.2.stdout | default('')).split(' ')[0] != item.1.stat.checksum
+      register: frr_copied
+      changed_when: true
+      loop: "{{ fabric_nodes | zip(frr_local.results, frr_remote.results) | list }}"
+      loop_control:
+        label: "{{ item.0.name }}"
+
+    - name: Reload FRR where the config changed
+      ansible.builtin.command: >-
+        docker exec {{ prefix }}{{ item.item.0.name }}
+        /usr/lib/frr/frr-reload.py --reload /etc/frr/frr.conf
+      when: item is changed
+      changed_when: true
+      loop: "{{ frr_copied.results }}"
+      loop_control:
+        label: "{{ item.item.0.name }}"
+
+    - name: Configure host addressing
+      ansible.builtin.command:
+        cmd: docker exec -i {{ prefix }}{{ item.name }} sh -s
+        stdin: "{{ lookup('ansible.builtin.file', build_dir ~ '/hosts/' ~ item.name ~ '.sh') }}"
+      register: hostcfg
+      changed_when: "'CHANGED' in hostcfg.stdout"
+      loop: "{{ hosts }}"
+      loop_control:
+        label: "{{ item.name }}"

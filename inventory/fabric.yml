@@ -1,0 +1,84 @@
+---
+# Single source of truth for the lab.
+# Topology, FRR configs, Linux bridge/VXLAN setup and the tests are all derived
+# from this file. Change it, run `make deploy`, then `make test`.
+
+lab_name: evpn
+
+images:
+  frr: quay.io/frrouting/frr:10.5.5
+  host: alpine:3.22
+
+# Route-target prefix used for every L2/L3 VNI. Leafs sit in different ASNs,
+# so auto-derived RTs (ASN:VNI) would not match; explicit RTs avoid that.
+rt_prefix: "65000"
+
+# Anycast gateway MAC shared by all leafs (symmetric IRB).
+anycast_gw_mac: "00:00:5e:00:01:01"
+
+spines:
+  - name: spine1
+    asn: 65100
+    loopback: 10.0.0.1
+  - name: spine2
+    asn: 65100
+    loopback: 10.0.0.2
+
+leafs:
+  - name: leaf1
+    asn: 65101
+    loopback: 10.0.0.11
+  - name: leaf2
+    asn: 65102
+    loopback: 10.0.0.12
+
+# Underlay links. BGP runs unnumbered over IPv6 link-local addresses,
+# so no IPs are assigned to fabric interfaces.
+fabric_links:
+  - [leaf1:eth1, spine1:eth1]
+  - [leaf1:eth2, spine2:eth1]
+  - [leaf2:eth1, spine1:eth2]
+  - [leaf2:eth2, spine2:eth2]
+
+# Tenant VRF with a symmetric IRB L3 VNI. VLANs that reference it get an
+# anycast gateway SVI on every leaf.
+vrfs:
+  - name: tenant1
+    l3vni: 50000
+
+vlans:
+  - id: 10
+    name: web
+    vni: 10010
+    subnet: 10.10.0.0/24
+    gateway: 10.10.0.1
+    vrf: tenant1
+  - id: 20
+    name: db
+    vni: 10020
+    subnet: 10.20.0.0/24
+    gateway: 10.20.0.1
+    vrf: tenant1
+
+# Hosts are single-homed, untagged access ports on a leaf.
+hosts:
+  - name: host1
+    leaf: leaf1
+    leaf_port: eth3
+    vlan: 10
+    ip: 10.10.0.101
+  - name: host2
+    leaf: leaf1
+    leaf_port: eth4
+    vlan: 20
+    ip: 10.20.0.102
+  - name: host3
+    leaf: leaf2
+    leaf_port: eth3
+    vlan: 10
+    ip: 10.10.0.103
+  - name: host4
+    leaf: leaf2
+    leaf_port: eth4
+    vlan: 20
+    ip: 10.20.0.104

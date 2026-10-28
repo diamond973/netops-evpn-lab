@@ -1,0 +1,35 @@
+---
+name: lab
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make lint
+
+  lab:
+    needs: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install containerlab
+        run: bash -c "$(curl -sL https://get.containerlab.dev)"
+      - name: Deploy fabric
+        run: make deploy
+      - name: Run tests
+        run: make test
+      - name: Show FRR state on failure
+        if: failure()
+        run: |
+          for n in spine1 spine2 leaf1 leaf2; do
+            echo "== $n"; docker exec clab-evpn-$n vtysh -c "show bgp summary" || true
+          done
+      - name: Destroy lab
+        if: always()
+        run: make destroy

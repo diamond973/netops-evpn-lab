@@ -1,7 +1,9 @@
 # netops-evpn-lab
 
+[![lab](https://github.com/diamond973/netops-evpn-lab/actions/workflows/lab.yml/badge.svg)](https://github.com/diamond973/netops-evpn-lab/actions/workflows/lab.yml)
+
 A small datacenter fabric built and tested as code: BGP EVPN / VXLAN on FRR,
-deployed with Containerlab and Ansible, verified by pytest.
+deployed with Containerlab and Ansible, verified by pytest, run end-to-end in CI.
 
 One YAML file describes the fabric. Everything else (topology, router configs,
 Linux bridge/VXLAN setup, tests) is generated from it.
@@ -62,3 +64,5 @@ make deploy   # creates .venv, renders configs, starts the lab, pushes configs
 make test     # 40 tests, about a minute
 make destroy  # stop the lab
 ```
+
+CI (GitHub Actions) runs `make lint`, then deploys the full lab on a runner and runs the tests on every push.

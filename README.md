@@ -1,7 +1,7 @@
 # netops-evpn-lab
 
 A small datacenter fabric built and tested as code: BGP EVPN / VXLAN on FRR,
-deployed with Containerlab and Ansible, verified by pytest, run end-to-end in CI.
+deployed with Containerlab and Ansible, verified by pytest.
 
 One YAML file describes the fabric. Everything else (topology, router configs,
 Linux bridge/VXLAN setup, tests) is generated from it.
